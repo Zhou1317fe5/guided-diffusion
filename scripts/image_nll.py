@@ -19,6 +19,16 @@ from guided_diffusion.script_util import (
 
 
 def main():
+    """
+    主函数，负责执行整个评估流程。
+    这个脚本的核心是评估一个训练好的扩散模型在给定数据集上的性能。
+    它通过计算数据的负对数似然（NLL）来实现，结果通常以“每维度比特数”（Bits Per Dimension, BPD）为单位报告。
+
+    评估流程包括：
+    1. 加载预训练的扩散模型。
+    2. 加载需要进行评估的数据集（例如测试集）。
+    3. 调用 run_bpd_evaluation 函数来执行核心的评估计算。
+    """
     args = create_argparser().parse_args()
 
     dist_util.setup_dist()
@@ -48,6 +58,27 @@ def main():
 
 
 def run_bpd_evaluation(model, diffusion, data, num_samples, clip_denoised):
+    """
+    执行 BPD (Bits Per Dimension) 评估。
+
+    BPD 是一种衡量生成模型拟合真实数据分布能力的指标。它表示模型压缩每个数据维度所需的平均比特数。
+    BPD 值越低，说明模型为真实数据分配的概率越高，模型的生成能力就越好。
+
+    计算过程如下：
+    1. 遍历数据集中的所有样本。
+    2. 对于每个批次的样本，调用 `diffusion.calc_bpd_loop` 函数。这个函数是计算 BPD 的核心，
+       它通过计算变分下界 (Variational Lower Bound, VLB) 来近似真实的数据对数似然。
+    3. `calc_bpd_loop` 返回一个包含多个度量的字典，包括 VLB 的各个组成部分 (`vb`, `mse` 等)
+       以及最终的 `total_bpd`。
+    4. 在分布式计算环境中，需要对所有进程计算出的 BPD 值进行 `all_reduce` 操作，以获得全局平均值。
+    5. 累积所有批次的结果，计算最终的平均 BPD。
+
+    :param model: 要评估的扩散模型。
+    :param diffusion: 扩散过程的辅助对象，包含了 BPD 计算的逻辑。
+    :param data: 数据加载器，提供评估用的数据批次。
+    :param num_samples: 要评估的样本总数。
+    :param clip_denoised: 是否在计算过程中对去噪结果进行裁剪。
+    """
     all_bpd = []
     all_metrics = {"vb": [], "mse": [], "xstart_mse": []}
     num_complete = 0
